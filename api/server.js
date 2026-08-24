@@ -56,6 +56,22 @@ const stateFile = uid => path.join(DATA, 'state-' + uid.replace(/[^a-zA-Z0-9_-]/
 function readState(uid) {
   try { return JSON.parse(fs.readFileSync(stateFile(uid), 'utf8')); } catch { return null; }
 }
+const coachPlansFile = path.join(DATA, 'coach-plans.json');
+
+
+function readCoachPlans() {
+  try {
+    const plans = JSON.parse(fs.readFileSync(coachPlansFile, 'utf8'));
+    return Array.isArray(plans) ? plans : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveCoachPlans(plans) {
+  atomicWrite(coachPlansFile, JSON.stringify(plans, null, 2));
+}
+
 
 /* ---------- push notifications (Web Push / VAPID) ---------- */
 const vapidFile = path.join(DATA, 'vapid.json');
@@ -604,7 +620,86 @@ const routes = {
 
   /* ---------- admin dashboard ---------- */
   // One row per user, cheap enough for a personal instance (reads each state file once).
-  'GET /api/admin/users': async (req, res) => {
+   'GET /api/admin/plans': async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+
+    const plans = readCoachPlans();
+
+    json(res, 200, {
+      plans: plans.map(p => ({
+        id: p.id,
+        name: p.name,
+        description: p.description || '',
+        routines: (p.routines || []).length,
+        createdAt: p.createdAt || null
+      }))
+    });
+  },
+  'POST /api/admin/plans': async (req, res) => {
+    const admin = requireAdmin(req, res);
+    if (!admin) return;
+
+    const body = await readBody(req);
+    const name = String(body.name || '').trim().slice(0, 80);
+
+    if (!name) {
+      return json(res, 400, { error: 'plan name required' });
+    }
+
+    const sourceState = readState(admin.id);
+
+    if (!sourceState) {
+      return json(res, 400, { error: 'admin has no state' });
+    }
+
+    const routines = JSON.parse(
+      JSON.stringify(sourceState.routines || [])
+    );
+
+    if (!routines.length) {
+      return json(res, 400, { error: 'admin has no routines' });
+    }
+
+    const usedExerciseIds = new Set(
+      routines.flatMap(r => (r.ex || []).map(e => e.id))
+    );
+
+    const customEx = (sourceState.customEx || [])
+      .filter(c => usedExerciseIds.has(c.id))
+      .map(c => JSON.parse(JSON.stringify(c)));
+
+    const plan = {
+      id: crypto.randomBytes(12).toString('base64url'),
+      name,
+      description: String(body.description || '').trim().slice(0, 300),
+      createdBy: admin.id,
+      createdAt: new Date().toISOString(),
+      routines,
+      week: JSON.parse(JSON.stringify(sourceState.week || {})),
+      customEx
+    };
+
+    const plans = readCoachPlans();
+    plans.push(plan);
+    saveCoachPlans(plans);
+
+    audit(req, 'admin.plan.create', {
+      user: admin,
+      msg: plan.name
+    });
+
+    json(res, 200, {
+      ok: true,
+      plan: {
+        id: plan.id,
+        name: plan.name,
+        description: plan.description,
+        routines: plan.routines.length,
+        createdAt: plan.createdAt
+      }
+    });
+  },
+    'GET /api/admin/users': async (req, res) => {
     if (!requireAdmin(req, res)) return;
     const users = db.users.map(u => {
       const S = readState(u.id) || {};
@@ -639,7 +734,123 @@ const routes = {
       workouts: (S.workouts || []).slice().reverse()   // newest first for display
     });
   },
+    'POST /api/admin/user/assign-plan': async (req, res) => {
+    const admin = requireAdmin(req, res);
+    if (!admin) return;
 
+    const body = await readBody(req);
+
+    const target = db.users.find(u => u.id === body.id);
+    if (!target) return json(res, 404, { error: 'no such user' });
+
+    if (target.id === admin.id) {
+      return json(res, 400, { error: 'cannot assign plan to yourself' });
+    }
+
+    const targetState = readState(target.id);
+
+if (!targetState) {
+  return json(res, 400, { error: 'target user has no state' });
+}
+
+const plans = readCoachPlans();
+const plan = plans.find(p => p.id === body.planId);
+
+if (!plan) {
+  return json(res, 404, { error: 'no such plan' });
+}
+
+const sourceRoutines = JSON.parse(
+  JSON.stringify(plan.routines || [])
+);
+
+    if (!sourceRoutines.length) {
+      return json(res, 400, { error: 'admin has no routines' });
+    }
+
+    targetState.routines = targetState.routines || [];
+    targetState.customEx = targetState.customEx || [];
+
+    // Only custom exercises actually used by the assigned routines.
+    const usedExerciseIds = new Set(
+      sourceRoutines.flatMap(r => (r.ex || []).map(e => e.id))
+    );
+
+    const sourceCustomEx = (plan.customEx || [])
+      .filter(c => usedExerciseIds.has(c.id));
+
+    // Map source custom-exercise IDs to IDs valid in the target account.
+    const exIdMap = {};
+
+    sourceCustomEx.forEach(c => {
+      const existing = targetState.customEx.find(x =>
+        String(x.n || '').toLowerCase() === String(c.n || '').toLowerCase()
+        && x.bp === c.bp
+      );
+
+      if (existing) {
+        exIdMap[c.id] = existing.id;
+        return;
+      }
+
+      const newId = crypto.randomBytes(12).toString('base64url');
+      exIdMap[c.id] = newId;
+
+      targetState.customEx.push({
+        ...c,
+        id: newId
+      });
+    });
+
+    // Every assigned routine gets a fresh ID.
+    const routineIdMap = {};
+
+    sourceRoutines.forEach(r => {
+      const oldId = r.id;
+      const newId = crypto.randomBytes(12).toString('base64url');
+
+      routineIdMap[oldId] = newId;
+      r.id = newId;
+
+      // Remap custom exercises; built-in exercise IDs stay unchanged.
+      r.ex = (r.ex || []).map(e => ({
+        ...e,
+        id: exIdMap[e.id] || e.id
+      }));
+    });
+
+    // Add the routines without deleting the user's existing routines.
+    targetState.routines.push(...sourceRoutines);
+
+    // The assigned weekly schedule becomes the active schedule.
+    const week = {};
+
+    Object.entries(plan.week || {}).forEach(([day, routineId]) => {
+      if (routineIdMap[routineId]) {
+        week[day] = routineIdMap[routineId];
+      }
+    });
+
+    targetState.week = week;
+    targetState._ts = Date.now();
+
+    atomicWrite(
+      stateFile(target.id),
+      JSON.stringify(targetState)
+    );
+
+    audit(req, 'admin.plan.assign', {
+      user: admin,
+      target,
+      msg: `${plan.name} · ${sourceRoutines.length} routines`
+    });
+
+    json(res, 200, {
+      ok: true,
+      plan: plan.name,
+      routines: sourceRoutines.length
+    });
+},	
   'POST /api/admin/user/disable': async (req, res) => {
     const admin = requireAdmin(req, res); if (!admin) return;
     const body = await readBody(req);
@@ -738,3 +949,4 @@ http.createServer(async (req, res) => {
     if (!res.headersSent) json(res, 500, { error: 'server error' });
   }
 }).listen(PORT, () => console.log(`gym-api on :${PORT} (rpID=${RP_ID}, origin=${ORIGIN})`));
+

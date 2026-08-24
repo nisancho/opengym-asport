@@ -128,7 +128,7 @@ function BwSheet({ required, onDone, close }) {
   </>
 }
 export function bwSheet(opts = {}) {
-  const h = ui().openSheet(close => <BwSheet {...opts} close={close} />, { locked: !!opts.required })
+  const h = ui().openSheet(close => <BwSheet {...opts} close={close} />)
   return h
 }
 

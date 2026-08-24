@@ -26,6 +26,8 @@ const dur = ms => { const m = Math.max(0, Math.floor(ms / 60000)); return m < 60
 
 function UserDetail({ id, onChanged, close }) {
   const [d, setD] = useState(null)
+  const [plans, setPlans] = useState([])
+  const [choosingPlan, setChoosingPlan] = useState(false)
   const toast = useUI(s => s.toast)
   useEffect(() => { api('/api/admin/user?id=' + encodeURIComponent(id)).then(setD).catch(e => toast(e.message)) }, [id])
   if (!d) return <div className="muted small">Loading…</div>
@@ -49,10 +51,74 @@ function UserDetail({ id, onChanged, close }) {
       <div className="tile"><div className="l">Routines</div><div className="v" style={{ fontSize: '1.1rem' }}>{d.routines.length}</div></div>
       <div className="tile"><div className="l">Last sync</div><div className="v" style={{ fontSize: '.95rem' }}>{rel(d.lastSync)}</div></div>
     </div>
-    {!u.admin && <button className={'btn ' + (u.disabled ? 'primary' : 'danger')} style={{ margin: '12px 0 4px' }}
-      onClick={() => u.disabled ? setDisabled(false)
-        : confirmSheet({ title: 'Disable ' + u.name + '?', message: 'They are signed out everywhere and can no longer sync or log in until re-enabled.', confirmText: 'Disable', danger: true, onConfirm: () => setDisabled(true) })}>
-      {u.disabled ? 'Enable account' : 'Disable account'}</button>}
+
+{!u.admin && !choosingPlan && <button
+  className="btn primary"
+  style={{ margin: '12px 0 4px' }}
+  onClick={() => {
+    api('/api/admin/plans')
+      .then(({ plans }) => {
+        if (!plans?.length) {
+          toast('No saved coach plans')
+          return
+        }
+
+        setPlans(plans)
+        setChoosingPlan(true)
+      })
+      .catch(e => toast(e.message))
+  }}
+>
+  Assign plan
+</button>}
+{choosingPlan && <>
+  <h4 className="sec">Choose training plan</h4>
+
+  <div className="list">
+    {plans.map(p => (
+      <div
+        key={p.id}
+        className="item"
+        onClick={() => confirmSheet({
+          title: `Assign ${p.name} to ${u.name}?`,
+          message: 'The training plan and weekly schedule will be copied. Workout history and bodyweight data will not be changed.',
+          confirmText: 'Assign plan',
+          onConfirm: () => api('/api/admin/user/assign-plan', {
+            method: 'POST',
+            body: JSON.stringify({
+              id: u.id,
+              planId: p.id
+            })
+          })
+            .then(r => {
+              toast(`Assigned ${r.plan}`)
+              onChanged()
+              close()
+            })
+            .catch(e => toast(e.message))
+        })}
+      >
+        <div className="grow">
+          <div className="tt">{p.name}</div>
+          <div className="ss">
+            {p.routines} routines
+            {p.description ? ` · ${p.description}` : ''}
+          </div>
+        </div>
+
+        <Icon name="chevronRight" className="chev" />
+      </div>
+    ))}
+  </div>
+
+  <Button
+    size="sm"
+    onClick={() => setChoosingPlan(false)}
+    style={{ marginTop: 10 }}
+  >
+    Cancel
+  </Button>
+</>}
     <h4 className="sec">Workout history</h4>
     {d.workouts.length ? <div className="list" style={{ gap: 0 }}>
       {d.workouts.slice(0, 60).map(w => <div key={w.id} className="row between" style={{ padding: '9px 2px', borderBottom: '1px solid var(--sep)' }}>
@@ -154,13 +220,17 @@ export default function Admin() {
   const openSheet = useUI(s => s.openSheet)
   const [users, setUsers] = useState(null)
   const [invites, setInvites] = useState(null)
+  const [plans, setPlans] = useState([])
   const [inviteOnly, setInviteOnly] = useState(false)
   const [tick, setTick] = useState(0)          // the ↻ button; the activity log listens to it
 
   const loadUsers = () => api('/api/admin/users').then(d => { setUsers(d.users); setInviteOnly(d.invite_only) }).catch(e => toast(e.message || 'Failed to load'))
   const loadInvites = () => api('/api/admin/invites').then(d => setInvites(d.invites)).catch(() => {})
+  const loadPlans = () => api('/api/admin/plans')
+  .then(d => setPlans(d.plans || []))
+  .catch(e => toast(e.message || 'Failed to load plans'))
   // poll every 15s so the "training now" section stays live without a manual refresh
-  useEffect(() => { if (!user?.admin) return; loadUsers(); loadInvites(); const iv = setInterval(loadUsers, 15000); return () => clearInterval(iv) }, [])
+  useEffect(() => { if (!user?.admin) return; loadUsers(); loadInvites();loadPlans(); const iv = setInterval(loadUsers, 15000); return () => clearInterval(iv) }, [])
   if (!user?.admin) return null
 
   const openUser = id => openSheet(close => <UserDetail id={id} onChanged={loadUsers} close={close} />)
@@ -191,7 +261,76 @@ export default function Admin() {
         <span className="tag acc">{dur(Date.now() - u.live.startedAt)}</span>
       </div>)}
     </div>}
+    <div className="card">
+  <div className="row between">
+    <h2 style={{ margin: 0 }}>Coach plans</h2>
 
+    <Button
+      variant="primary"
+      size="sm"
+      icon="plus"
+      onClick={() => {
+        const name = window.prompt('Plan name');
+
+        if (!name?.trim()) return;
+
+        api('/api/admin/plans', {
+          method: 'POST',
+          body: JSON.stringify({
+            name: name.trim()
+          })
+        })
+          .then(() => {
+            toast('Plan saved');
+            loadPlans();
+          })
+          .catch(e => toast(e.message));
+      }}
+    >
+      Save current
+    </Button>
+  </div>
+
+  <div
+    className="small muted"
+    style={{ margin: '6px 0 10px' }}
+  >
+    {plans.length} saved plans
+  </div>
+
+  {plans.map(p => (
+    <div
+      key={p.id}
+      className="row between"
+      style={{
+        padding: '9px 2px',
+        borderBottom: '1px solid var(--sep)'
+      }}
+    >
+      <div>
+        <div
+          className="small"
+          style={{ fontWeight: 600 }}
+        >
+          {p.name}
+        </div>
+
+        <div
+          className="dim"
+          style={{ fontSize: '.72rem' }}
+        >
+          {p.routines} routines
+        </div>
+      </div>
+    </div>
+  ))}
+
+  {!plans.length && (
+    <div className="dim small">
+      No coach plans saved yet.
+    </div>
+  )}
+</div>
     <InvitesCard invites={invites} reload={loadInvites} />
 
     <h4 className="sec">Users</h4>
