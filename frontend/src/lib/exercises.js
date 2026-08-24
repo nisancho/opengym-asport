@@ -1,5 +1,6 @@
 import { EXDB } from './exercises-data.js'
-import { t } from './i18n-core.js'
+import { t, getLang } from './i18n-core.js'
+import { EXERCISE_NAMES_ES } from '../locales/exercises-es.js'
 
 export { EXDB }
 
@@ -24,6 +25,15 @@ export const smOf = ex => {
 
 export const EXIDX = {}
 EXDB.forEach(e => { EXIDX[e.id] = e })
+export const exerciseName = ex => {
+  if (!ex?.n) return t('Unknown exercise')
+
+  if (getLang() === 'es') {
+    return EXERCISE_NAMES_ES[ex.n] || t(ex.n)
+  }
+
+  return t(ex.n)
+}
 export const BODYPARTS = [...new Set(EXDB.map(e => e.bp))].sort()
 
 // Equipment options present in a given list of exercises, most common first (issue #6).
