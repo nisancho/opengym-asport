@@ -819,8 +819,8 @@ const sourceRoutines = JSON.parse(
       }));
     });
 
-    // Add the routines without deleting the user's existing routines.
-    targetState.routines.push(...sourceRoutines);
+    // Replace the user's current routines with the assigned plan.
+targetState.routines = sourceRoutines;
 
     // The assigned weekly schedule becomes the active schedule.
     const week = {};
