@@ -56,6 +56,34 @@ const stateFile = uid => path.join(DATA, 'state-' + uid.replace(/[^a-zA-Z0-9_-]/
 function readState(uid) {
   try { return JSON.parse(fs.readFileSync(stateFile(uid), 'utf8')); } catch { return null; }
 }
+/* ---------- body composition measurements ---------- */
+
+const measurementsDir = path.join(DATA, 'measurements');
+fs.mkdirSync(measurementsDir, { recursive: true });
+
+const safeUid = uid => String(uid || '').replace(/[^a-zA-Z0-9_-]/g, '');
+
+const measurementsFile = uid =>
+  path.join(measurementsDir, safeUid(uid) + '.json');
+
+function readMeasurements(uid) {
+  try {
+    const rows = JSON.parse(
+      fs.readFileSync(measurementsFile(uid), 'utf8')
+    );
+
+    return Array.isArray(rows) ? rows : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveMeasurements(uid, rows) {
+  atomicWrite(
+    measurementsFile(uid),
+    JSON.stringify(rows, null, 2)
+  );
+}
 const coachPlansFile = path.join(DATA, 'coach-plans.json');
 
 
@@ -534,7 +562,19 @@ const routes = {
     audit(req, 'auth.logout.all', { user });
     json(res, 200, { ok: true }, { 'Set-Cookie': clearCookie });
   },
+  'GET /api/progress/measurements': async (req, res) => {
+  const user = readSession(req);
 
+  if (!user) {
+    return json(res, 401, { error: 'not signed in' });
+  }
+
+  const measurements = readMeasurements(user.id)
+    .slice()
+    .sort((a, b) => String(a.date).localeCompare(String(b.date)));
+
+  json(res, 200, { measurements });
+},
   'GET /api/data': async (req, res) => {
     const user = readSession(req);
     if (!user) return json(res, 401, { error: 'not signed in' });
@@ -699,6 +739,111 @@ const routes = {
       }
     });
   },
+    'GET /api/admin/user/measurements': async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+
+  const id = new URL(req.url, 'http://x').searchParams.get('id');
+  const user = db.users.find(u => u.id === id);
+
+  if (!user) {
+    return json(res, 404, { error: 'no such user' });
+  }
+
+  const measurements = readMeasurements(user.id)
+    .slice()
+    .sort((a, b) => String(b.date).localeCompare(String(a.date)));
+
+  json(res, 200, {
+    user: {
+      id: user.id,
+      name: user.name
+    },
+    measurements
+  });
+},
+
+'POST /api/admin/user/measurements': async (req, res) => {
+  const admin = requireAdmin(req, res);
+  if (!admin) return;
+
+  const body = await readBody(req);
+
+  const target = db.users.find(u => u.id === body.id);
+
+  if (!target) {
+    return json(res, 404, { error: 'no such user' });
+  }
+
+  const date = String(body.date || '');
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return json(res, 400, { error: 'invalid date' });
+  }
+
+  const num = value => {
+    if (value === '' || value === null || value === undefined) {
+      return null;
+    }
+
+    const n = Number(value);
+
+    return Number.isFinite(n) ? n : null;
+  };
+
+  const measurement = {
+    id: crypto.randomBytes(12).toString('base64url'),
+    date,
+    createdAt: Date.now(),
+    createdBy: admin.id,
+
+    tanita: {
+      weight: num(body.tanita?.weight),
+      bodyFatPct: num(body.tanita?.bodyFatPct),
+      muscleMass: num(body.tanita?.muscleMass),
+      boneMass: num(body.tanita?.boneMass),
+      bmi: num(body.tanita?.bmi),
+      bmr: num(body.tanita?.bmr),
+      metabolicAge: num(body.tanita?.metabolicAge),
+      bodyWaterPct: num(body.tanita?.bodyWaterPct),
+      visceralFat: num(body.tanita?.visceralFat)
+    },
+
+    circumferences: {
+      chest: num(body.circumferences?.chest),
+      waist: num(body.circumferences?.waist),
+      abdomen: num(body.circumferences?.abdomen),
+      hips: num(body.circumferences?.hips),
+      thigh: num(body.circumferences?.thigh),
+      calf: num(body.circumferences?.calf),
+      arm: num(body.circumferences?.arm)
+    }
+  };
+
+  if (measurement.tanita.weight === null) {
+    return json(res, 400, { error: 'weight required' });
+  }
+
+  const measurements = readMeasurements(target.id);
+
+  measurements.push(measurement);
+
+  measurements.sort(
+    (a, b) => String(a.date).localeCompare(String(b.date))
+  );
+
+  saveMeasurements(target.id, measurements);
+
+  audit(req, 'admin.measurement.create', {
+    user: admin,
+    target,
+    msg: date
+  });
+
+  json(res, 200, {
+    ok: true,
+    measurement
+  });
+},
     'GET /api/admin/users': async (req, res) => {
     if (!requireAdmin(req, res)) return;
     const users = db.users.map(u => {
