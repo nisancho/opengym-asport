@@ -28,8 +28,108 @@ function UserDetail({ id, onChanged, close }) {
   const [d, setD] = useState(null)
   const [plans, setPlans] = useState([])
   const [choosingPlan, setChoosingPlan] = useState(false)
+const [measurements, setMeasurements] = useState([])
+  const [addingMeasurement, setAddingMeasurement] = useState(false)
+
+  const [measurementForm, setMeasurementForm] = useState({
+    date: new Date().toISOString().slice(0, 10),
+
+    tanita: {
+      weight: '',
+      bodyFatPct: '',
+      muscleMass: '',
+      boneMass: '',
+      bmi: '',
+      bmr: '',
+      metabolicAge: '',
+      bodyWaterPct: '',
+      visceralFat: ''
+    },
+
+    circumferences: {
+      chest: '',
+      waist: '',
+      abdomen: '',
+      hips: '',
+      thigh: '',
+      calf: '',
+      arm: ''
+    }
+  })
   const toast = useUI(s => s.toast)
-  useEffect(() => { api('/api/admin/user?id=' + encodeURIComponent(id)).then(setD).catch(e => toast(e.message)) }, [id])
+  useEffect(() => {
+  api('/api/admin/user?id=' + encodeURIComponent(id))
+    .then(setD)
+    .catch(e => toast(e.message))
+
+  api('/api/admin/user/measurements?id=' + encodeURIComponent(id))
+    .then(r => setMeasurements(r.measurements || []))
+    .catch(e => toast(e.message))
+}, [id])
+const setTanitaValue = (key, value) => {
+  setMeasurementForm(m => ({
+    ...m,
+    tanita: {
+      ...m.tanita,
+      [key]: value
+    }
+  }))
+}
+
+const setCircumferenceValue = (key, value) => {
+  setMeasurementForm(m => ({
+    ...m,
+    circumferences: {
+      ...m.circumferences,
+      [key]: value
+    }
+  }))
+}
+
+const saveMeasurement = () => {
+  api('/api/admin/user/measurements', {
+    method: 'POST',
+    body: JSON.stringify({
+      id,
+      ...measurementForm
+    })
+  })
+    .then(r => {
+      setMeasurements(rows => [r.measurement, ...rows])
+
+      toast('Measurement saved')
+
+      setAddingMeasurement(false)
+
+      setMeasurementForm({
+        date: new Date().toISOString().slice(0, 10),
+
+        tanita: {
+          weight: '',
+          bodyFatPct: '',
+          muscleMass: '',
+          boneMass: '',
+          bmi: '',
+          bmr: '',
+          metabolicAge: '',
+          bodyWaterPct: '',
+          visceralFat: ''
+        },
+
+        circumferences: {
+          chest: '',
+          waist: '',
+          abdomen: '',
+          hips: '',
+          thigh: '',
+          calf: '',
+          arm: ''
+        }
+      })
+    })
+    .catch(e => toast(e.message))
+}
+
   if (!d) return <div className="muted small">Loading…</div>
   const u = d.user
   const setDisabled = disabled => {
@@ -51,6 +151,195 @@ function UserDetail({ id, onChanged, close }) {
       <div className="tile"><div className="l">Routines</div><div className="v" style={{ fontSize: '1.1rem' }}>{d.routines.length}</div></div>
       <div className="tile"><div className="l">Last sync</div><div className="v" style={{ fontSize: '.95rem' }}>{rel(d.lastSync)}</div></div>
     </div>
+<div style={{ marginTop: 14 }}>
+  <div className="row between">
+    <div>
+      <h4 className="sec" style={{ margin: 0 }}>
+        Body composition
+      </h4>
+
+      <div className="small muted" style={{ marginTop: 4 }}>
+        {measurements.length
+          ? `${measurements.length} measurement${measurements.length === 1 ? '' : 's'}`
+          : 'No measurements yet'}
+      </div>
+    </div>
+
+    <Button
+      variant="primary"
+      size="sm"
+      icon="plus"
+      onClick={() => setAddingMeasurement(v => !v)}
+    >
+      New measurement
+    </Button>
+  </div>
+
+  {addingMeasurement && (
+    <div
+      className="card"
+      style={{
+        marginTop: 12,
+        padding: 14
+      }}
+    >
+      <h4 style={{ marginTop: 0 }}>Tanita measurement</h4>
+
+      <label className="small muted">Date</label>
+
+      <input
+        type="date"
+        value={measurementForm.date}
+        onChange={e =>
+          setMeasurementForm(m => ({
+            ...m,
+            date: e.target.value
+          }))
+        }
+        style={{
+          width: '100%',
+          margin: '4px 0 14px',
+          padding: 10
+        }}
+      />
+
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+          gap: 10
+        }}
+      >
+        {[
+          ['weight', 'Weight (kg)'],
+          ['bodyFatPct', 'Body fat (%)'],
+          ['muscleMass', 'Muscle mass (kg)'],
+          ['boneMass', 'Bone mass (kg)'],
+          ['bmi', 'BMI'],
+          ['bmr', 'BMR (kcal)'],
+          ['metabolicAge', 'Metabolic age'],
+          ['bodyWaterPct', 'Body water (%)'],
+          ['visceralFat', 'Visceral fat']
+        ].map(([key, label]) => (
+          <label key={key} className="small">
+            <span className="muted">{label}</span>
+
+            <input
+              type="number"
+              step="any"
+              value={measurementForm.tanita[key]}
+              onChange={e => setTanitaValue(key, e.target.value)}
+              style={{
+                width: '100%',
+                marginTop: 4,
+                padding: 10
+              }}
+            />
+          </label>
+        ))}
+      </div>
+
+      <h4 style={{ margin: '18px 0 10px' }}>
+        Circumferences
+      </h4>
+
+      <div className="small muted" style={{ marginBottom: 10 }}>
+        Optional · centimeters
+      </div>
+
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+          gap: 10
+        }}
+      >
+        {[
+          ['chest', 'Chest'],
+          ['waist', 'Waist'],
+          ['abdomen', 'Abdomen'],
+          ['hips', 'Hips'],
+          ['thigh', 'Thigh'],
+          ['calf', 'Calf'],
+          ['arm', 'Arm']
+        ].map(([key, label]) => (
+          <label key={key} className="small">
+            <span className="muted">{label}</span>
+
+            <input
+              type="number"
+              step="any"
+              value={measurementForm.circumferences[key]}
+              onChange={e =>
+                setCircumferenceValue(key, e.target.value)
+              }
+              style={{
+                width: '100%',
+                marginTop: 4,
+                padding: 10
+              }}
+            />
+          </label>
+        ))}
+      </div>
+
+      <div
+        className="row"
+        style={{
+          gap: 8,
+          marginTop: 16
+        }}
+      >
+        <Button
+          variant="primary"
+          onClick={saveMeasurement}
+        >
+          Save measurement
+        </Button>
+
+        <Button
+          onClick={() => setAddingMeasurement(false)}
+        >
+          Cancel
+        </Button>
+      </div>
+    </div>
+  )}
+
+  {!!measurements.length && (
+    <div style={{ marginTop: 12 }}>
+      {measurements.slice(0, 5).map(m => (
+        <div
+          key={m.id}
+          className="row between"
+          style={{
+            padding: '9px 2px',
+            borderBottom: '1px solid var(--sep)'
+          }}
+        >
+          <div>
+            <div className="small" style={{ fontWeight: 600 }}>
+              {fmtDate(m.date)}
+            </div>
+
+            <div className="dim" style={{ fontSize: '.72rem' }}>
+              {m.tanita?.bodyFatPct != null
+                ? `${m.tanita.bodyFatPct}% fat`
+                : 'Body composition'}
+              {m.tanita?.muscleMass != null
+                ? ` · ${m.tanita.muscleMass} kg muscle`
+                : ''}
+            </div>
+          </div>
+
+          <div style={{ fontWeight: 600 }}>
+            {m.tanita?.weight ?? '—'} kg
+          </div>
+        </div>
+      ))}
+    </div>
+  )}
+</div>
 
 {!u.admin && !choosingPlan && <button
   className="btn primary"

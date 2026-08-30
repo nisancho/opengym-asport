@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useStore } from '../store/useStore.js'
+import { api } from '../lib/api.js'
 import { EXIDX } from '../lib/exercises.js'
 import { lastBW, streakWeeks, setLabel, modeOf, effortOf, metricModeForEntry, metricRowsForEntry, bestWeightForEntry } from '../lib/history.js'
 import { fmtNum, fmtDate, fmtVol, todayISO, weekKey } from '../lib/format.js'
@@ -271,19 +272,173 @@ function EffortCard({ S }) {
     </>}
   </div>
 }
+/* ---------- body composition ---------- */
 
+const bodyCompositionOf = measurement => {
+  if (!measurement) return null
+
+  const t = measurement.tanita || {}
+
+  const weight = Number(t.weight)
+  const fatPct = Number(t.bodyFatPct)
+  const muscleMass = Number(t.muscleMass)
+  const waterPct = Number(t.bodyWaterPct)
+
+  const fatMass =
+    Number.isFinite(weight) && Number.isFinite(fatPct)
+      ? weight * fatPct / 100
+      : null
+
+  const leanMass =
+    Number.isFinite(weight) && fatMass != null
+      ? weight - fatMass
+      : null
+
+  const waterKg =
+    Number.isFinite(weight) && Number.isFinite(waterPct)
+      ? weight * waterPct / 100
+      : null
+
+  const musclePct =
+    Number.isFinite(weight) &&
+    weight > 0 &&
+    Number.isFinite(muscleMass)
+      ? muscleMass / weight * 100
+      : null
+
+  return {
+    ...measurement,
+    calculated: {
+      fatMass,
+      leanMass,
+      waterKg,
+      musclePct
+    }
+  }
+}
+
+const measurementValue = (measurement, metric) => {
+  const t = measurement?.tanita || {}
+
+  if (metric === 'weight') return t.weight
+  if (metric === 'fat') return t.bodyFatPct
+  if (metric === 'muscle') return t.muscleMass
+  if (metric === 'water') return t.bodyWaterPct
+
+  return null
+}
 // Stats = the analytics hub: all charts, progress and history live here.
 export default function Stats() {
-  const nav = useNavigate()
-  const S = useStore(s => s.S)
-  const [range, setRange] = useState(90)
+const nav = useNavigate()
+const S = useStore(s => s.S)
+
+const [measurements, setMeasurements] = useState([])
+const [bodyMetric, setBodyMetric] = useState('weight')
+
+const [range, setRange] = useState(90)
   const [exId, setExId] = useState(null)
   const [exMetric, setExMetric] = useState('top')
   const now = Date.now()
   const kind = displayScale(S)
   const hd = scaleName(kind)
+useEffect(() => {
+  api('/api/progress/measurements')
+    .then(r => setMeasurements(r.measurements || []))
+    .catch(() => setMeasurements([]))
+}, [])
+const composition = measurements
+  .slice()
+  .sort((a, b) => String(a.date).localeCompare(String(b.date)))
+
+const latestMeasurement =
+  composition.length
+    ? bodyCompositionOf(composition[composition.length - 1])
+    : null
+
+const previousMeasurement =
+  composition.length > 1
+    ? bodyCompositionOf(composition[composition.length - 2])
+    : null
+
+const latestTanita = latestMeasurement?.tanita || {}
+const latestCalc = latestMeasurement?.calculated || {}
+
+const previousTanita = previousMeasurement?.tanita || {}
+
+const bodyMetricConfig = {
+  weight: {
+    label: 'Peso',
+    unit: 'kg'
+  },
+
+  fat: {
+    label: 'Grasa',
+    unit: '%'
+  },
+
+  muscle: {
+    label: 'Músculo',
+    unit: 'kg'
+  },
+
+  water: {
+    label: 'Agua',
+    unit: '%'
+  }
+}
+
+const compositionPoints = composition
+  .filter(m => {
+    if (range === 0) return true
+
+    const ts = new Date(m.date).getTime()
+
+    return ts > now - range * 86400000
+  })
+  .map(m => ({
+    t: new Date(m.date).getTime(),
+    y: Number(measurementValue(m, bodyMetric)),
+    d: m.date
+  }))
+  .filter(p => Number.isFinite(p.y))
+
+const tanitaWeightPoints = composition
+  .filter(m => m?.tanita?.weight != null)
+  .map(m => ({
+    t: new Date(m.date).getTime(),
+    y: Number(m.tanita.weight),
+    d: m.date
+  }))
+  .filter(p => Number.isFinite(p.y))
+
 
   const bwPts = S.bodyweight.filter(b => range === 0 || (b.t || new Date(b.d).getTime()) > now - range * 86400000)
+const combinedWeightPoints = (() => {
+  const byDate = new Map()
+
+  for (const p of bwPts) {
+    byDate.set(p.d, p)
+  }
+
+  for (const p of tanitaWeightPoints) {
+    if (
+      range === 0 ||
+      p.t > now - range * 86400000
+    ) {
+      // A Tanita measurement is the more complete reading
+      // when both sources exist for the same day.
+      byDate.set(p.d, p)
+    }
+  }
+
+  return [...byDate.values()]
+    .sort((a, b) => a.t - b.t)
+})()
+
+const bodyChartPoints =
+  bodyMetric === 'weight'
+    ? combinedWeightPoints
+    : compositionPoints
     .map(b => ({ t: b.t || new Date(b.d).getTime(), y: b.w, d: b.d }))
   const bw30 = S.bodyweight.filter(b => (b.t || new Date(b.d).getTime()) > now - 30 * 86400000)
   const bwDelta30 = bw30.length > 1 ? bw30[bw30.length - 1].w - bw30[0].w : null
@@ -382,7 +537,256 @@ export default function Stats() {
     {workouts.length > 0 && <MuscleBalance S={S} />}
     {hasEffort(S) && <EffortCard S={S} />}
 
-    <div className="cols">
+{latestMeasurement && (
+  <>
+    <div className="card">
+      <div style={{ marginBottom: 14 }}>
+        <h2 style={{ margin: 0 }}>
+          Composición corporal
+        </h2>
+
+        <div
+          className="small muted"
+          style={{ marginTop: 4 }}
+        >
+          Última medición · {fmtDate(latestMeasurement.date, true)}
+        </div>
+      </div>
+
+      <div
+        className="tiles"
+        style={{
+          marginBottom: 6
+        }}
+      >
+        <div className="tile">
+          <div className="l">Peso</div>
+          <div className="v" style={{ fontSize: 23 }}>
+            {latestTanita.weight != null
+              ? `${fmtNum(latestTanita.weight)} kg`
+              : '—'}
+          </div>
+        </div>
+
+        <div className="tile">
+          <div className="l">Grasa corporal</div>
+          <div className="v" style={{ fontSize: 23 }}>
+            {latestTanita.bodyFatPct != null
+              ? `${fmtNum(latestTanita.bodyFatPct)} %`
+              : '—'}
+          </div>
+        </div>
+
+        <div className="tile">
+          <div className="l">Masa muscular</div>
+          <div className="v" style={{ fontSize: 23 }}>
+            {latestTanita.muscleMass != null
+              ? `${fmtNum(latestTanita.muscleMass)} kg`
+              : '—'}
+          </div>
+        </div>
+
+        <div className="tile">
+          <div className="l">Agua corporal</div>
+          <div className="v" style={{ fontSize: 23 }}>
+            {latestTanita.bodyWaterPct != null
+              ? `${fmtNum(latestTanita.bodyWaterPct)} %`
+              : '—'}
+          </div>
+        </div>
+      </div>
+
+      <h4
+        className="sec"
+        style={{
+          marginTop: 18,
+          marginBottom: 8
+        }}
+      >
+        Detalles
+      </h4>
+
+      <div className="tiles">
+        <div className="tile">
+          <div className="l">Masa grasa</div>
+          <div className="v" style={{ fontSize: 19 }}>
+            {latestCalc.fatMass != null
+              ? `${fmtNum(latestCalc.fatMass)} kg`
+              : '—'}
+          </div>
+        </div>
+
+        <div className="tile">
+          <div className="l">Masa libre de grasa</div>
+          <div className="v" style={{ fontSize: 19 }}>
+            {latestCalc.leanMass != null
+              ? `${fmtNum(latestCalc.leanMass)} kg`
+              : '—'}
+          </div>
+        </div>
+
+        <div className="tile">
+          <div className="l">IMC</div>
+          <div className="v" style={{ fontSize: 19 }}>
+            {latestTanita.bmi != null
+              ? fmtNum(latestTanita.bmi)
+              : '—'}
+          </div>
+        </div>
+
+        <div className="tile">
+          <div className="l">Grasa visceral</div>
+          <div className="v" style={{ fontSize: 19 }}>
+            {latestTanita.visceralFat ?? '—'}
+          </div>
+        </div>
+
+        <div className="tile">
+          <div className="l">Metabolismo basal</div>
+          <div className="v" style={{ fontSize: 19 }}>
+            {latestTanita.bmr != null
+              ? `${fmtNum(latestTanita.bmr)} kcal`
+              : '—'}
+          </div>
+        </div>
+
+        <div className="tile">
+          <div className="l">Edad metabólica</div>
+          <div className="v" style={{ fontSize: 19 }}>
+            {latestTanita.metabolicAge != null
+              ? `${latestTanita.metabolicAge} años`
+              : '—'}
+          </div>
+        </div>
+
+        <div className="tile">
+          <div className="l">Agua corporal</div>
+          <div className="v" style={{ fontSize: 19 }}>
+            {latestCalc.waterKg != null
+              ? `${fmtNum(latestCalc.waterKg)} kg`
+              : '—'}
+          </div>
+        </div>
+
+        <div className="tile">
+          <div className="l">Músculo relativo</div>
+          <div className="v" style={{ fontSize: 19 }}>
+            {latestCalc.musclePct != null
+              ? `${fmtNum(latestCalc.musclePct)} %`
+              : '—'}
+          </div>
+        </div>
+
+        <div className="tile">
+          <div className="l">Masa ósea</div>
+          <div className="v" style={{ fontSize: 19 }}>
+            {latestTanita.boneMass != null
+              ? `${fmtNum(latestTanita.boneMass)} kg`
+              : '—'}
+          </div>
+        </div>
+      </div>
+
+      {latestMeasurement.circumferences &&
+        Object.values(latestMeasurement.circumferences)
+          .some(v => v != null) && (
+        <>
+          <h4
+            className="sec"
+            style={{
+              marginTop: 18,
+              marginBottom: 8
+            }}
+          >
+            Perímetros
+          </h4>
+
+          <div className="tiles">
+            {[
+              ['chest', 'Pecho'],
+              ['waist', 'Cintura'],
+              ['abdomen', 'Abdomen'],
+              ['hips', 'Cadera'],
+              ['thigh', 'Muslo'],
+              ['calf', 'Gemelo'],
+              ['arm', 'Brazo']
+            ]
+              .filter(([key]) =>
+                latestMeasurement.circumferences[key] != null
+              )
+              .map(([key, label]) => (
+                <div
+                  key={key}
+                  className="tile"
+                >
+                  <div className="l">
+                    {label}
+                  </div>
+
+                  <div
+                    className="v"
+                    style={{ fontSize: 19 }}
+                  >
+                    {fmtNum(
+                      latestMeasurement.circumferences[key]
+                    )} cm
+                  </div>
+                </div>
+              ))}
+          </div>
+        </>
+      )}
+    </div>
+
+    <div className="card">
+      <div style={{ marginBottom: 12 }}>
+        <h2 style={{ margin: 0 }}>
+          Evolución
+        </h2>
+
+        <div
+          className="small muted"
+          style={{ marginTop: 4 }}
+        >
+          Cambios en tu composición corporal
+        </div>
+      </div>
+
+      <Segmented
+        className="seg-range"
+        value={bodyMetric}
+        onChange={setBodyMetric}
+        options={[
+          { value: 'weight', label: 'Peso' },
+          { value: 'fat', label: 'Grasa' },
+          { value: 'muscle', label: 'Músculo' },
+          { value: 'water', label: 'Agua' }
+        ]}
+      />
+
+      <Segmented
+        className="seg-range"
+        value={range}
+        onChange={setRange}
+        options={[
+          { value: 30, label: '1M' },
+          { value: 90, label: '3M' },
+          { value: 365, label: '1Y' },
+          { value: 0, label: t('All') }
+        ]}
+      />
+
+      <div className="chart">
+        <LineChart
+          points={bodyChartPoints}
+          h={160}
+          unit={bodyMetricConfig[bodyMetric].unit}
+        />
+      </div>
+    </div>
+  </>
+)}
+<div className="cols">
       <div className="card">
         <div className="row between" style={{ marginBottom: 8 }}>
           <h2 style={{ margin: 0 }}>{t('Body weight')}</h2>
