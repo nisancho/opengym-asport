@@ -10,6 +10,8 @@ import { glyphOf, DEFAULT_GLYPH } from '../lib/glyphs.js'
 export default function Plan() {
   const nav = useNavigate()
   const S = useStore(s => s.S)
+const user = useStore(s => s.user)
+const canEdit = !!user?.admin
   const update = useStore(s => s.update)
 
   const addRoutine = () => {
@@ -21,7 +23,16 @@ export default function Plan() {
   return <>
     <div className="hdr">
       <div><h1>{t('Plan')}</h1><div className="sub">{t('Your weekly routine')}</div></div>
-      <button className="iconbtn" onClick={planToolsSheet} aria-label={t('Share your plan')} title={t('Share your plan')}><Icon name="upload" /></button>
+      {canEdit && (
+  <button
+    className="iconbtn"
+    onClick={planToolsSheet}
+    aria-label={t('Share your plan')}
+    title={t('Share your plan')}
+  >
+    <Icon name="upload" />
+  </button>
+)}
     </div>
     <div className="cols"><div>
       <h4 className="sec">{t('Week schedule')}</h4>
@@ -37,14 +48,22 @@ export default function Plan() {
     </div><div>
       <div className="row between" style={{ marginTop: 22, marginBottom: 10 }}>
         <h4 className="sec" style={{ margin: 0 }}>{t('Routines')}</h4>
-        <Button size="sm" variant="tinted" icon="plus" onClick={addRoutine}>{t('New')}</Button>
+        {canEdit && (
+  <Button size="sm" variant="tinted" icon="plus" onClick={addRoutine}>
+    {t('New')}
+  </Button>
+)}
       </div>
       {S.routines.length ? <div className="list">{S.routines.map(r => <div key={r.id} className="item" onClick={() => nav('/plan/r/' + r.id)}>
         <span className="lrow-i"><Icon name={glyphOf(r.emoji)} /></span>
         <div className="grow"><div className="tt">{r.name}</div><div className="ss">{exCount(r.ex.length)}</div></div>
         <Icon name="chevronRight" className="chev" /></div>)}</div> : <>
         <div className="empty"><div className="ico"><Icon name="clipboard" /></div>{t('No routines yet.')}<br />{t('Create one or load the starter plan.')}</div>
-        <Button icon="sparkles" onClick={loadStarterPlan}>{t('Load starter plan (Push / Pull / Legs)')}</Button>
+        {canEdit && (
+  <Button icon="sparkles" onClick={loadStarterPlan}>
+    {t('Load starter plan (Push / Pull / Legs)')}
+  </Button>
+)}
       </>}
     </div></div>
   </>

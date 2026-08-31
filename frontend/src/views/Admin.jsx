@@ -9,6 +9,7 @@ import { workoutVolume, setsDone } from '../lib/history.js'
 import { confirmSheet } from '../sheets.jsx'
 import Icon from '../components/Icon.jsx'
 import { Button } from '../components/ui.jsx'
+import QRCode from 'qrcode'
 
 // Admin-only operator dashboard (owner passkey + admin flag; guarded again server-side).
 // Deliberately English-only — it isn't part of the translated end-user surface, so it stays
@@ -496,27 +497,168 @@ const resetPassword = () => {
 
 function InvitesCard({ invites, reload }) {
   const toast = useUI(s => s.toast)
-  const gen = () => api('/api/admin/invites/new', { method: 'POST', body: '{}' })
-    .then(({ invite }) => { navigator.clipboard?.writeText(invite.code).catch(() => {}); toast('Code ' + invite.code + ' created & copied'); reload() })
+  const [qr, setQr] = useState('')
+  const [lastCode, setLastCode] = useState('')
+
+  const makeQr = async code => {
+    try {
+      const base = window.location.origin + window.location.pathname
+      const url = `${base}#/register?invite=${encodeURIComponent(code)}`
+
+      const dataUrl = await QRCode.toDataURL(url, {
+        width: 320,
+        margin: 2
+      })
+
+      setQr(dataUrl)
+      setLastCode(code)
+    } catch {
+      toast('No se pudo generar el QR')
+    }
+  }
+
+  const gen = () => api('/api/admin/invites/new', {
+    method: 'POST',
+    body: '{}'
+  })
+    .then(async ({ invite }) => {
+      navigator.clipboard?.writeText(invite.code).catch(() => {})
+      await makeQr(invite.code)
+      toast('Código ' + invite.code + ' creado')
+      reload()
+    })
     .catch(e => toast(e.message))
-  const revoke = code => api('/api/admin/invites/revoke', { method: 'POST', body: JSON.stringify({ code }) })
-    .then(() => { toast('Code revoked'); reload() }).catch(e => toast(e.message))
+
+  const revoke = code =>
+    api('/api/admin/invites/revoke', {
+      method: 'POST',
+      body: JSON.stringify({ code })
+    })
+      .then(() => {
+        if (lastCode === code) {
+          setQr('')
+          setLastCode('')
+        }
+        toast('Código revocado')
+        reload()
+      })
+      .catch(e => toast(e.message))
+
   const open = (invites || []).filter(i => !i.usedBy)
   const used = (invites || []).filter(i => i.usedBy)
-  return <div className="card">
-    <div className="row between"><h2 style={{ margin: 0 }}>Invite codes</h2>
-      <Button variant="primary" size="sm" onClick={gen} icon="plus">Generate</Button></div>
-    <div className="small muted" style={{ margin: '6px 0 10px' }}>{open.length} unused · {used.length} redeemed</div>
-    {open.map(i => <div key={i.code} className="row between" style={{ padding: '7px 2px', borderBottom: '1px solid var(--sep)' }}>
-      <span style={{ fontFamily: 'ui-monospace,SFMono-Regular,Menlo,monospace', fontWeight: 500, letterSpacing: '.06em' }}
-        onClick={() => { navigator.clipboard?.writeText(i.code).catch(() => {}); toast('Copied ' + i.code) }}>{i.code}</span>
-      <button className="iconbtn" style={{ width: 32, height: 30, borderRadius: 8, fontSize: 15, color: 'var(--red)' }} onClick={() => revoke(i.code)} aria-label="revoke"><Icon name="trash" /></button>
-    </div>)}
-    {used.map(i => <div key={i.code} className="row between dim" style={{ padding: '7px 2px', fontSize: '.8rem' }}>
-      <span style={{ fontFamily: 'monospace' }}>{i.code}</span><span>→ {i.usedByName || 'used'}</span>
-    </div>)}
-    {!open.length && !used.length && <div className="dim small">No codes yet — generate one to invite someone.</div>}
-  </div>
+
+  return (
+    <div className="card">
+      <div className="row between">
+        <h2 style={{ margin: 0 }}>Códigos de invitación</h2>
+        <Button variant="primary" size="sm" onClick={gen} icon="plus">
+          Generar
+        </Button>
+      </div>
+
+      <div className="small muted" style={{ margin: '6px 0 10px' }}>
+        {open.length} sin usar · {used.length} utilizados
+      </div>
+
+      {qr && (
+        <div
+          style={{
+            textAlign: 'center',
+            padding: 16,
+            marginBottom: 12,
+            background: '#fff',
+            borderRadius: 12
+          }}
+        >
+          <img
+            src={qr}
+            alt="QR de invitación"
+            style={{ width: 220, maxWidth: '100%', display: 'block', margin: '0 auto' }}
+          />
+
+          <div
+            style={{
+              marginTop: 8,
+              color: '#111',
+              fontWeight: 700,
+              letterSpacing: '.08em'
+            }}
+          >
+            {lastCode}
+          </div>
+
+          <div
+            style={{
+              marginTop: 4,
+              color: '#555',
+              fontSize: '.8rem'
+            }}
+          >
+            Escanea para crear tu cuenta
+          </div>
+        </div>
+      )}
+
+      {open.map(i => (
+        <div
+          key={i.code}
+          className="row between"
+          style={{
+            padding: '7px 2px',
+            borderBottom: '1px solid var(--sep)'
+          }}
+        >
+          <span
+            style={{
+              fontFamily: 'ui-monospace,SFMono-Regular,Menlo,monospace',
+              fontWeight: 500,
+              letterSpacing: '.06em',
+              cursor: 'pointer'
+            }}
+            onClick={() => {
+              navigator.clipboard?.writeText(i.code).catch(() => {})
+              makeQr(i.code)
+              toast('Copiado ' + i.code)
+            }}
+          >
+            {i.code}
+          </span>
+
+          <button
+            className="iconbtn"
+            style={{
+              width: 32,
+              height: 30,
+              borderRadius: 8,
+              fontSize: 15,
+              color: 'var(--red)'
+            }}
+            onClick={() => revoke(i.code)}
+            aria-label="revocar"
+          >
+            <Icon name="trash" />
+          </button>
+        </div>
+      ))}
+
+      {used.map(i => (
+        <div
+          key={i.code}
+          className="row between dim"
+          style={{ padding: '7px 2px', fontSize: '.8rem' }}
+        >
+          <span style={{ fontFamily: 'monospace' }}>{i.code}</span>
+          <span>→ {i.usedByName || 'utilizado'}</span>
+        </div>
+      ))}
+
+      {!open.length && !used.length && (
+        <div className="dim small">
+          Todavía no hay códigos de invitación.
+        </div>
+      )}
+    </div>
+  )
 }
 
 // Who signed in, who tried and failed, what an admin changed. A card rather than its own route:

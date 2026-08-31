@@ -11,6 +11,7 @@ import { Button } from '../components/ui.jsx'
 
 export default function Library() {
   const S = useStore(s => s.S)
+const user = useStore(s => s.user)
   const [q, setQ] = useState('')
   const [bp, setBp] = useState('')
   const [eq, setEq] = useState('')
@@ -55,7 +56,19 @@ export default function Library() {
           <Thumb ex={e} />
           <div className="grow"><div className="tt capitalize">{exerciseName(e)}</div><div className="ss capitalize">{t(e.tg || e.bp)} · {t(e.eq)}</div></div>
           {best > 0 && <span className="tag acc">{fmtNum(best)}</span>}
-          <Button size="sm" variant="tinted" icon="plus" onClick={ev => { ev.stopPropagation(); addToRoutineSheet(e) }}>{t('Plan')}</Button>
+          {user?.admin && (
+  <Button
+    size="sm"
+    variant="tinted"
+    icon="plus"
+    onClick={ev => {
+      ev.stopPropagation()
+      addToRoutineSheet(e)
+    }}
+  >
+    {t('Plan')}
+  </Button>
+)}
         </div>
       })}
       {f.length === 0 && <div className="empty"><div className="ico"><Icon name="magnifier" /></div>{t('No match')}</div>}

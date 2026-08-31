@@ -9,14 +9,14 @@ import { useState, useRef, useEffect } from 'react'
 import Icon from '../components/Icon.jsx'
 import { Button } from '../components/ui.jsx'
 
-function RegisterSheet({ close }) {
+function RegisterSheet({ close, initialCode = '' }) {
   const { setUser, pushState, pullState, loadConfig } = useStore()
   const config = useStore(s => s.config)
 
   const [name, setName] = useState('')
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
-  const [code, setCode] = useState('')
+const [code, setCode] = useState(initialCode)
 
   const inviteOnly = !!config?.invite_only
   const ref = useRef(null)
@@ -161,6 +161,24 @@ export default function Login() {
 
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
+useEffect(() => {
+  const hash = window.location.hash || ''
+  const match = hash.match(/[?&]invite=([^&]+)/)
+
+  if (!match) return
+
+  const invite = decodeURIComponent(match[1]).toUpperCase()
+
+  useUI.getState().openSheet(close => (
+    <RegisterSheet close={close} initialCode={invite} />
+  ))
+
+  window.history.replaceState(
+    null,
+    '',
+    window.location.pathname + window.location.search + '#/'
+  )
+}, [])
 
   const passwordLogin = async () => {
     try {
