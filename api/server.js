@@ -47,6 +47,37 @@ db.subs = db.subs || [];
 db.invites = db.invites || [];
 const isAdmin = user => !!user && (user.admin === true || ADMIN_UIDS.includes(user.id));
 function saveDb() { atomicWrite(dbFile, JSON.stringify(db, null, 2)); }
+/* ---------- username + password auth ---------- */
+
+const normalizeUsername = value =>
+  String(value || '').trim().toLowerCase();
+
+const validUsername = username =>
+  /^[a-z0-9._-]{3,30}$/.test(username);
+
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16);
+  const hash = crypto.scryptSync(String(password), salt, 32);
+
+  return `scrypt$${salt.toString('base64url')}$${hash.toString('base64url')}`;
+}
+
+function verifyPassword(password, stored) {
+  try {
+    const [type, saltB64, hashB64] = String(stored || '').split('$');
+
+    if (type !== 'scrypt' || !saltB64 || !hashB64) return false;
+
+    const salt = Buffer.from(saltB64, 'base64url');
+    const expected = Buffer.from(hashB64, 'base64url');
+    const actual = crypto.scryptSync(String(password), salt, expected.length);
+
+    return expected.length === actual.length &&
+      crypto.timingSafeEqual(expected, actual);
+  } catch {
+    return false;
+  }
+}
 function atomicWrite(file, content) {
   const tmp = file + '.tmp';
   fs.writeFileSync(tmp, content);
@@ -404,6 +435,193 @@ const routes = {
     const user = readSession(req);
     if (!user) return json(res, 401, { error: 'not signed in' });
     json(res, 200, { user: { id: user.id, name: user.name, admin: isAdmin(user) } });
+  },
+
+  // Attach username/password login to an existing signed-in account.
+  // Useful for accounts originally created with a passkey.
+  'POST /api/password/setup': async (req, res) => {
+    const user = readSession(req);
+    if (!user) return json(res, 401, { error: 'not signed in' });
+
+    const body = await readBody(req);
+    const username = normalizeUsername(body.username);
+    const password = String(body.password || '');
+
+    if (!validUsername(username)) {
+      return json(res, 400, {
+        error: 'username must be 3-30 characters using letters, numbers, dot, dash or underscore'
+      });
+    }
+
+    if (password.length < 8 || password.length > 128) {
+      return json(res, 400, {
+        error: 'password must be between 8 and 128 characters'
+      });
+    }
+
+    const taken = db.users.some(
+      u => u.id !== user.id && normalizeUsername(u.username) === username
+    );
+
+    if (taken) {
+      return json(res, 409, { error: 'username already exists' });
+    }
+
+    user.username = username;
+    user.passwordHash = hashPassword(password);
+
+    saveDb();
+
+    audit(req, 'auth.password.setup', { user });
+
+    json(res, 200, {
+      user: {
+        id: user.id,
+        name: user.name,
+        username: user.username,
+        admin: isAdmin(user)
+      }
+    });
+  },
+
+  // Create a new account using username + password.
+  'POST /api/password/register': async (req, res) => {
+    const body = await readBody(req);
+
+    const name = String(body.name || '').trim().slice(0, 40);
+    const username = normalizeUsername(body.username);
+    const password = String(body.password || '');
+    const code = String(body.code || '').trim().toUpperCase();
+
+    if (!name) {
+      return json(res, 400, { error: 'name required' });
+    }
+
+    if (!validUsername(username)) {
+      return json(res, 400, {
+        error: 'username must be 3-30 characters using letters, numbers, dot, dash or underscore'
+      });
+    }
+
+    if (password.length < 8 || password.length > 128) {
+      return json(res, 400, {
+        error: 'password must be between 8 and 128 characters'
+      });
+    }
+
+    if (db.users.some(u => normalizeUsername(u.username) === username)) {
+      return json(res, 409, { error: 'username already exists' });
+    }
+
+    let invite = null;
+
+    if (INVITE_ONLY) {
+      invite = db.invites.find(
+        i => i.code === code && !i.usedBy && !i.revoked
+      );
+
+      if (!invite) {
+        audit(req, 'auth.password.register.denied', {
+          ok: false,
+          name,
+          msg: 'invite-rejected'
+        });
+
+        return json(res, 403, {
+          error: 'a valid invite code is required'
+        });
+      }
+    }
+
+    const user = {
+      id: crypto.randomBytes(12).toString('base64url'),
+      name,
+      username,
+      passwordHash: hashPassword(password),
+      created: new Date().toISOString()
+    };
+
+    if (invite) {
+      user.invitedBy = invite.code;
+      invite.usedBy = user.id;
+      invite.usedAt = user.created;
+    }
+
+    db.users.push(user);
+    saveDb();
+
+    audit(req, 'auth.password.register.ok', {
+      user,
+      msg: invite ? invite.code : null
+    });
+
+    json(
+      res,
+      200,
+      {
+        user: {
+          id: user.id,
+          name: user.name,
+          username: user.username,
+          admin: isAdmin(user)
+        }
+      },
+      { 'Set-Cookie': sessionCookie(user) }
+    );
+  },
+
+  // Sign in using username + password.
+  'POST /api/password/login': async (req, res) => {
+    const body = await readBody(req);
+
+    const username = normalizeUsername(body.username);
+    const password = String(body.password || '');
+
+    const user = db.users.find(
+      u => normalizeUsername(u.username) === username
+    );
+
+    // Keep the same response whether the username or password was wrong.
+    if (!user || !user.passwordHash ||
+        !verifyPassword(password, user.passwordHash)) {
+
+      audit(req, 'auth.password.login.fail', {
+        ok: false,
+        msg: 'invalid-credentials'
+      });
+
+      return json(res, 401, {
+        error: 'invalid username or password'
+      });
+    }
+
+    if (user.disabled) {
+      audit(req, 'auth.password.login.fail', {
+        ok: false,
+        user,
+        msg: 'account-disabled'
+      });
+
+      return json(res, 403, {
+        error: 'this account has been disabled'
+      });
+    }
+
+    audit(req, 'auth.password.login.ok', { user });
+
+    json(
+      res,
+      200,
+      {
+        user: {
+          id: user.id,
+          name: user.name,
+          username: user.username,
+          admin: isAdmin(user)
+        }
+      },
+      { 'Set-Cookie': sessionCookie(user) }
+    );
   },
 
   'POST /api/register/options': async (req, res) => {
@@ -851,8 +1069,13 @@ const routes = {
       const workouts = S.workouts || [];
       const last = workouts[workouts.length - 1];
       return {
-        id: u.id, name: u.name, created: u.created || null,
-        disabled: !!u.disabled, admin: isAdmin(u), invitedBy: u.invitedBy || null,
+  id: u.id,
+  name: u.name,
+  username: u.username || null,
+  created: u.created || null,
+  disabled: !!u.disabled,
+  admin: isAdmin(u),
+  invitedBy: u.invitedBy || null,
         workouts: workouts.length,
         lastWorkout: last ? last.d : null,
         lastSync: S._ts || null,
@@ -871,7 +1094,15 @@ const routes = {
     if (!u) return json(res, 404, { error: 'no such user' });
     const S = readState(u.id) || {};
     json(res, 200, {
-      user: { id: u.id, name: u.name, created: u.created || null, disabled: !!u.disabled, admin: isAdmin(u), invitedBy: u.invitedBy || null },
+      user: {
+  id: u.id,
+  name: u.name,
+  username: u.username || null,
+  created: u.created || null,
+  disabled: !!u.disabled,
+  admin: isAdmin(u),
+  invitedBy: u.invitedBy || null
+},
       unit: S.unit || 'kg',
       lastSync: S._ts || null,
       routines: (S.routines || []).map(r => ({ id: r.id, name: r.name, emoji: r.emoji, count: (r.ex || []).length })),
@@ -1017,6 +1248,77 @@ targetState.routines = sourceRoutines;
     }));
     json(res, 200, { invites, invite_only: INVITE_ONLY });
   },
+'POST /api/admin/user/delete': async (req, res) => {
+  const admin = requireAdmin(req, res);
+  if (!admin) return;
+
+  const body = await readBody(req);
+  const id = String(body.id || '');
+
+  if (!id) {
+    return json(res, 400, { error: 'missing user id' });
+  }
+
+  if (id === admin.id) {
+    return json(res, 400, { error: 'you cannot delete your own account' });
+  }
+
+  const index = db.users.findIndex(u => u.id === id);
+
+  if (index === -1) {
+    return json(res, 404, { error: 'user not found' });
+  }
+
+  const user = db.users[index];
+
+  db.users.splice(index, 1);
+  db.creds = db.creds.filter(c => c.userId !== id);
+  db.subs = db.subs.filter(s => s.userId !== id);
+
+  saveDb();
+
+  audit(req, 'admin.user.delete', {
+    user: admin,
+    target: user
+  });
+
+  json(res, 200, { ok: true });
+},
+
+'POST /api/admin/user/password': async (req, res) => {
+  const admin = requireAdmin(req, res);
+  if (!admin) return;
+
+  const body = await readBody(req);
+  const uid = String(body.id || '');
+  const password = String(body.password || '');
+
+  const user = db.users.find(u => u.id === uid);
+
+  if (!user) {
+    return json(res, 404, { error: 'user not found' });
+  }
+
+  if (password.length < 8 || password.length > 128) {
+    return json(res, 400, {
+      error: 'password must be between 8 and 128 characters'
+    });
+  }
+
+  user.passwordHash = hashPassword(password);
+
+  // Invalidate old signed-in sessions.
+  user.sv = sessionVersion(user) + 1;
+
+  saveDb();
+
+  audit(req, 'admin.password.reset', {
+    user: admin,
+    target: user
+  });
+
+  json(res, 200, { ok: true });
+},
 
   'POST /api/admin/invites/new': async (req, res) => {
     const admin = requireAdmin(req, res); if (!admin) return;

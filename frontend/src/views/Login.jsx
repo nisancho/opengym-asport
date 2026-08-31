@@ -1,6 +1,6 @@
 import { useStore } from '../store/useStore.js'
 import { useUI } from '../store/useUI.js'
-import { webauthnOK, passkeyLogin, passkeyRegister, BIO } from '../lib/api.js'
+import { webauthnOK, passkeyLogin, BIO } from '../lib/api.js'
 import { hasData } from '../store/useStore.js'
 import { t } from '../lib/i18n.js'
 import { DEMO, REPO } from '../lib/demo.js'
@@ -12,42 +12,175 @@ import { Button } from '../components/ui.jsx'
 function RegisterSheet({ close }) {
   const { setUser, pushState, pullState, loadConfig } = useStore()
   const config = useStore(s => s.config)
+
   const [name, setName] = useState('')
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
   const [code, setCode] = useState('')
+
   const inviteOnly = !!config?.invite_only
   const ref = useRef(null)
-  useEffect(() => { setTimeout(() => ref.current?.focus(), 250) }, [])
-  // Boot already fetched this; retry here only if that attempt failed, so the invite field still
-  // appears on an instance whose config arrived late rather than never.
-  useEffect(() => { loadConfig() }, [loadConfig])
+
+  useEffect(() => {
+    setTimeout(() => ref.current?.focus(), 250)
+  }, [])
+
+  useEffect(() => {
+    loadConfig()
+  }, [loadConfig])
+
   const go = async () => {
     const n = name.trim()
-    if (!n) { useUI.getState().toast(t('Enter a name')); return }
-    if (inviteOnly && !code.trim()) { useUI.getState().toast(t('An invite code is required')); return }
+    const u = username.trim().toLowerCase()
+
+    if (!n) {
+      useUI.getState().toast('Introduce tu nombre')
+      return
+    }
+
+    if (!u) {
+      useUI.getState().toast('Introduce un nombre de usuario')
+      return
+    }
+
+    if (password.length < 8) {
+      useUI.getState().toast('La contraseña debe tener al menos 8 caracteres')
+      return
+    }
+
+    if (inviteOnly && !code.trim()) {
+      useUI.getState().toast('Necesitas un código de invitación')
+      return
+    }
+
     try {
-      const u = await passkeyRegister(n, code.trim())
-      setUser(u); close()
-      if (hasData(useStore.getState().S)) { await pushState(); useUI.getState().toast(t('Profile created — data from this device moved into it')) }
-      else { await pullState(); useUI.getState().toast(t('Welcome, {0}', u.name)) }
-    } catch (e) { if (e.name !== 'NotAllowedError' && e.name !== 'AbortError') useUI.getState().toast(e.message || t('Registration failed')) }
+      const r = await fetch('/api/password/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: n,
+          username: u,
+          password,
+          code: code.trim()
+        })
+      })
+
+      const data = await r.json()
+
+      if (!r.ok) {
+        throw new Error(data.error || 'No se pudo crear la cuenta')
+      }
+
+      setUser(data.user)
+      close()
+
+      if (hasData(useStore.getState().S)) {
+        await pushState()
+        useUI.getState().toast('Cuenta creada')
+      } else {
+        await pullState()
+        useUI.getState().toast(`Bienvenido, ${data.user.name}`)
+      }
+    } catch (e) {
+      useUI.getState().toast(e.message || 'No se pudo crear la cuenta')
+    }
   }
+
   return <>
-    <h3>{t('Create your profile')}</h3>
-    <div className="muted small" style={{ marginBottom: 14 }}>{t('Pick a name, then confirm with {0}. The passkey is saved in your device — no password needed.', BIO)}</div>
-    <input ref={ref} className="input" placeholder={t('Your name')} maxLength={40} value={name} onChange={e => setName(e.target.value)} />
+    <h3>Crear cuenta</h3>
+
+    <div className="muted small" style={{ marginBottom: 14 }}>
+      Crea tus datos de acceso para el Centro Deportivo A-Sport.
+    </div>
+
+    <input
+      ref={ref}
+      className="input"
+      placeholder="Nombre"
+      maxLength={40}
+      value={name}
+      onChange={e => setName(e.target.value)}
+      autoComplete="name"
+    />
+
+    <div style={{ height: 10 }} />
+
+    <input
+      className="input"
+      placeholder="Usuario"
+      maxLength={30}
+      value={username}
+      onChange={e => setUsername(e.target.value)}
+      autoComplete="username"
+    />
+
+    <div style={{ height: 10 }} />
+
+    <input
+      className="input"
+      type="password"
+      placeholder="Contraseña"
+      value={password}
+      onChange={e => setPassword(e.target.value)}
+      autoComplete="new-password"
+      onKeyDown={e => {
+        if (e.key === 'Enter' && (!inviteOnly || code.trim())) go()
+      }}
+    />
+
     {inviteOnly && <>
       <div style={{ height: 10 }} />
-      <input className="input" placeholder={t('Invite code')} maxLength={40} value={code}
-        onChange={e => setCode(e.target.value.toUpperCase())} style={{ letterSpacing: '.14em', fontWeight: 600, textAlign: 'center' }} />
-      <div className="dim small" style={{ marginTop: 6 }}>{t('This app is invite-only — enter the code you were given.')}</div>
+
+      <input
+        className="input"
+        placeholder="Código de invitación"
+        maxLength={40}
+        value={code}
+        onChange={e => setCode(e.target.value.toUpperCase())}
+        style={{
+          letterSpacing: '.14em',
+          fontWeight: 600,
+          textAlign: 'center'
+        }}
+      />
+
+      <div className="dim small" style={{ marginTop: 6 }}>
+        Introduce el código proporcionado por el Centro Deportivo A-Sport.
+      </div>
     </>}
-    <div style={{ height: 12 }} />
-    <Button variant="primary" onClick={go}>{t('Create passkey')}</Button>
+
+    <div style={{ height: 14 }} />
+
+    <Button variant="primary" onClick={go}>
+      Crear cuenta
+    </Button>
   </>
 }
-
 export default function Login() {
   const { setUser, pullState, setGuest } = useStore()
+
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
+
+  const passwordLogin = async () => {
+    try {
+      const r = await fetch('/api/password/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password })
+      })
+
+      const data = await r.json()
+
+      if (!r.ok) throw new Error(data.error || 'Error al iniciar sesión')
+
+      setUser(data.user)
+      await pullState()
+      useUI.getState().toast(`Bienvenido, ${data.user.name}`)
+    } catch (e) {
+      useUI.getState().toast(e.message || 'No se pudo iniciar sesión')
+    }
+  }
   const config = useStore(s => s.config)
   const canGuest = guestAllowed(config)
   const signIn = async () => {
@@ -55,8 +188,14 @@ export default function Login() {
     catch (e) { if (e.name !== 'NotAllowedError' && e.name !== 'AbortError') useUI.getState().toast(e.message || t('Sign-in failed')) }
   }
   const head = <>
-    <div style={{ fontSize: 54, display: 'flex', justifyContent: 'center', color: 'var(--acc)' }}><Icon name="dumbbell" /></div>
-    <h1 style={{ fontSize: 34, fontWeight: 700, letterSpacing: '-.028em', margin: '10px 0 4px' }}>openGym</h1>
+    <div style={{ display: 'flex', justifyContent: 'center' }}>
+  <img
+    src="/logo-asport.svg"
+    alt="Centro Deportivo A-Sport"
+    style={{ width: 150, height: 150, objectFit: 'contain' }}
+  />
+</div>
+    <h1 style={{ fontSize: 34, fontWeight: 700, letterSpacing: '-.028em', margin: '10px 0 4px' }}>Centro Deportivo A-Sport</h1>
   </>
   const wrap = { display: 'flex', flexDirection: 'column', justifyContent: 'center', minHeight: '78vh', textAlign: 'center' }
 
@@ -78,11 +217,46 @@ export default function Login() {
   return (
     <div className="narrow" style={wrap}>
       {head}
-      <div className="muted" style={{ marginBottom: 34 }}>{t('Your workouts. Your weights. Your profile.')}</div>
-      {webauthnOK() ? <>
-        <Button variant="primary" icon="person" onClick={signIn}>{t('Sign in with passkey')}</Button>
+<div className="muted" style={{ marginBottom: 24 }}>
+  Tu perfil en el Centro Deportivo A-Sport
+</div>
+
+<input
+  className="input"
+  placeholder="Usuario"
+  value={username}
+  onChange={e => setUsername(e.target.value)}
+  autoComplete="username"
+/>
+
+<div style={{ height: 10 }} />
+
+<input
+  className="input"
+  type="password"
+  placeholder="Contraseña"
+  value={password}
+  onChange={e => setPassword(e.target.value)}
+  autoComplete="current-password"
+  onKeyDown={e => {
+    if (e.key === 'Enter') passwordLogin()
+  }}
+/>
+
+<div style={{ height: 12 }} />
+
+<Button variant="primary" onClick={passwordLogin}>
+  Entrar
+</Button>
+
+      <div style={{ height: 18 }} />
+
+{webauthnOK() ? <>
+  <Button variant="primary" icon="person" onClick={signIn}>
+    {t('Entrar con passkey')}
+  </Button>
         <div style={{ height: 10 }} />
-        <Button icon="sparkles" onClick={() => useUI.getState().openSheet(close => <RegisterSheet close={close} />)}>{t('Create new profile')}</Button>
+        <Button icon="sparkles" onClick={() => useUI.getState().openSheet(close => <RegisterSheet close={close} />)}>{t('Crear nuevo perfil')}</Button>
         {canGuest && <div style={{ height: 10 }} />}
       </> : <div className="card small muted" style={{ textAlign: 'left' }}>{canGuest
         ? t("This browser doesn't support passkeys — you can still use openGym locally on this device.")

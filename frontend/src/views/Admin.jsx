@@ -26,6 +26,7 @@ const dur = ms => { const m = Math.max(0, Math.floor(ms / 60000)); return m < 60
 
 function UserDetail({ id, onChanged, close }) {
   const [d, setD] = useState(null)
+const [newPassword, setNewPassword] = useState('')
   const [plans, setPlans] = useState([])
   const [choosingPlan, setChoosingPlan] = useState(false)
 const [measurements, setMeasurements] = useState([])
@@ -136,9 +137,34 @@ const saveMeasurement = () => {
     api('/api/admin/user/disable', { method: 'POST', body: JSON.stringify({ id: u.id, disabled }) })
       .then(() => { toast(disabled ? 'User disabled' : 'User enabled'); onChanged(); close() })
       .catch(e => toast(e.message))
+}
+const resetPassword = () => {
+  if (newPassword.length < 8) {
+    toast('La contraseña debe tener al menos 8 caracteres')
+    return
   }
+
+  api('/api/admin/user/password', {
+    method: 'POST',
+    body: JSON.stringify({
+      id: u.id,
+      password: newPassword
+    })
+  })
+    .then(() => {
+      toast('Contraseña actualizada')
+      setNewPassword('')
+    })
+    .catch(e => toast(e.message))
+}
+  
   return <>
     <h3 className="capitalize">{u.name}</h3>
+{u.username && (
+  <div className="small muted" style={{ marginTop: -4, marginBottom: 10 }}>
+    Usuario: <strong>{u.username}</strong>
+  </div>
+)}
     <div className="row" style={{ gap: 6, flexWrap: 'wrap', margin: '8px 0 12px' }}>
       {u.admin && <span className="tag acc">admin</span>}
       {u.disabled && <span className="tag" style={{ color: 'var(--red)' }}>disabled</span>}
@@ -151,6 +177,29 @@ const saveMeasurement = () => {
       <div className="tile"><div className="l">Routines</div><div className="v" style={{ fontSize: '1.1rem' }}>{d.routines.length}</div></div>
       <div className="tile"><div className="l">Last sync</div><div className="v" style={{ fontSize: '.95rem' }}>{rel(d.lastSync)}</div></div>
     </div>
+
+<div className="card" style={{ marginTop: 14, padding: 14 }}>
+  <h4 style={{ margin: '0 0 10px' }}>Cambiar contraseña</h4>
+
+  <input
+    className="input"
+    type="password"
+    placeholder="Nueva contraseña"
+    value={newPassword}
+    onChange={e => setNewPassword(e.target.value)}
+    autoComplete="new-password"
+  />
+
+  <div style={{ height: 10 }} />
+
+  <Button
+    variant="primary"
+    onClick={resetPassword}
+    disabled={newPassword.length < 8}
+  >
+    Restablecer contraseña
+  </Button>
+</div>
 <div style={{ marginTop: 14 }}>
   <div className="row between">
     <div>
@@ -408,7 +457,33 @@ const saveMeasurement = () => {
     Cancel
   </Button>
 </>}
-    <h4 className="sec">Workout history</h4>
+{!u.admin && (
+  <Button
+    onClick={() => confirmSheet({
+      title: `¿Eliminar a ${u.name}?`,
+      message: 'Esta acción eliminará la cuenta del usuario. No se puede deshacer.',
+      confirmText: 'Eliminar usuario',
+      onConfirm: () => api('/api/admin/user/delete', {
+        method: 'POST',
+        body: JSON.stringify({ id: u.id })
+      })
+        .then(() => {
+          toast('Usuario eliminado')
+          onChanged()
+          close()
+        })
+        .catch(e => toast(e.message))
+    })}
+    style={{
+      marginTop: 16,
+      marginBottom: 8,
+      color: 'var(--red)'
+    }}
+  >
+    Eliminar usuario
+  </Button>
+)}   
+ <h4 className="sec">Workout history</h4>
     {d.workouts.length ? <div className="list" style={{ gap: 0 }}>
       {d.workouts.slice(0, 60).map(w => <div key={w.id} className="row between" style={{ padding: '9px 2px', borderBottom: '1px solid var(--sep)' }}>
         <div><div className="small" style={{ fontWeight: 600 }}>{w.name}</div>
