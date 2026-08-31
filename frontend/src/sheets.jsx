@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useStore } from './store/useStore.js'
 import { useUI } from './store/useUI.js'
-import { EXDB, EXIDX, BODYPARTS, isCardio, isBodyweightEq, allExercises, equipmentOf, smOf,exerciseName } from './lib/exercises.js'
+import { EXDB, EXIDX, BODYPARTS, isCardio, isBodyweightEq, allExercises, equipmentOf, smOf, exerciseName, setExerciseAliases } from './lib/exercises.js'
 import { fmtDate, fmtNum, fmtVol, fmtDur, durPart, todayISO, uid, exCount, DAYN, MONTHS_LONG, ACCENTS } from './lib/format.js'
 import { lastEntryFor, bestWeightFor, buildSets, effectiveRoutineId, workoutVolume, setsDone, setsDoneActive, lastBW, supersetUnits, unitOf, setLabel, defaultConfig, cleanupSg, modeOf, effortOf, isBw, isPerSide, sideReps, workSetsDone } from './lib/history.js'
 import { beep, vibrate } from './lib/sound.js'
@@ -22,6 +22,7 @@ import { nextPrescription, applyPrescription, policyFor, defaultIncrement, POLIC
 import { MOBILE, shareExport } from './lib/mobile.js'
 import { buildCompletedWorkout } from './lib/finish-workout.js'
 import { isWarmupRow } from './lib/workout-model.js'
+import { api } from './lib/api.js'
 
 const S = () => useStore.getState().S
 const update = (...a) => useStore.getState().update(...a)
@@ -284,11 +285,67 @@ function OneRM({ ex }) {
 
 function ExerciseDetail({ ex, close }) {
 const user = useStore(s => s.user)
+const loadConfig = useStore(s => s.loadConfig)
+const [editingName, setEditingName] = useState(false)
+const [aliasName, setAliasName] = useState(exerciseName(ex))
   const st = useStore(s => s.S)
   const last = lastEntryFor(st, ex.id)
   const best = bestWeightFor(st, ex.id)
   return <>
     <h3 className="capitalize">{exerciseName(ex)}</h3>
+{user?.admin && (
+  <div style={{ marginBottom: 10 }}>
+    {!editingName ? (
+      <Button
+        size="sm"
+        icon="pencil"
+        onClick={() => {
+          setAliasName(exerciseName(ex))
+          setEditingName(true)
+        }}
+      >
+        Editar nombre
+      </Button>
+    ) : (
+      <div style={{ display: 'flex', gap: 8 }}>
+        <input
+          className="input"
+          value={aliasName}
+          onChange={e => setAliasName(e.target.value)}
+          maxLength={100}
+          placeholder="Nombre del ejercicio"
+          style={{ flex: 1 }}
+        />
+
+        <Button
+          variant="primary"
+          size="sm"
+          onClick={async () => {
+            try {
+              await api('/api/admin/exercise-alias', {
+                method: 'POST',
+                body: JSON.stringify({
+                  id: ex.id,
+                  name: aliasName.trim()
+                })
+              })
+
+              const r = await api('/api/exercise-aliases')
+              setExerciseAliases(r.aliases || {})
+
+              setEditingName(false)
+              toast('Nombre actualizado')
+            } catch (e) {
+              toast(e.message || 'No se pudo actualizar el nombre')
+            }
+          }}
+        >
+          Guardar
+        </Button>
+      </div>
+    )}
+  </div>
+)}
     <Media ex={ex} />
     <div className="row" style={{ gap: 6, flexWrap: 'wrap', margin: '10px 0' }}>
       <span className="tag acc">{t(ex.bp)}</span>

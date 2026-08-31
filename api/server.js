@@ -39,12 +39,13 @@ fs.mkdirSync(DATA, { recursive: true });
 const secretFile = path.join(DATA, 'secret');
 if (!fs.existsSync(secretFile)) fs.writeFileSync(secretFile, crypto.randomBytes(32).toString('hex'), { mode: 0o600 });
 const SECRET = fs.readFileSync(secretFile, 'utf8').trim();
-
 const dbFile = path.join(DATA, 'db.json');
-let db = { users: [], creds: [], subs: [], invites: [] };
+
+let db = { users: [], creds: [], subs: [], invites: [], exerciseAliases: {} };
 try { db = JSON.parse(fs.readFileSync(dbFile, 'utf8')); } catch {}
 db.subs = db.subs || [];
 db.invites = db.invites || [];
+db.exerciseAliases = db.exerciseAliases || {};
 const isAdmin = user => !!user && (user.admin === true || ADMIN_UIDS.includes(user.id));
 function saveDb() { atomicWrite(dbFile, JSON.stringify(db, null, 2)); }
 /* ---------- username + password auth ---------- */
@@ -1240,7 +1241,51 @@ targetState.routines = sourceRoutines;
     json(res, 200, { ok: true, id: u.id, disabled: u.disabled });
   },
 
-  'GET /api/admin/invites': async (req, res) => {
+'GET /api/exercise-aliases': async (req, res) => {
+  json(res, 200, {
+    aliases: db.exerciseAliases || {}
+  });
+},
+
+'POST /api/admin/exercise-alias': async (req, res) => {
+  const admin = requireAdmin(req, res);
+  if (!admin) return;
+
+  const body = await readBody(req);
+
+  const id = String(body.id || '').trim();
+  const name = String(body.name || '').trim();
+
+  if (!id) {
+    return json(res, 400, { error: 'missing exercise id' });
+  }
+
+  if (name.length > 100) {
+    return json(res, 400, { error: 'exercise name too long' });
+  }
+
+  db.exerciseAliases = db.exerciseAliases || {};
+
+  if (name) {
+    db.exerciseAliases[id] = name;
+  } else {
+    delete db.exerciseAliases[id];
+  }
+
+  saveDb();
+
+  audit(req, 'admin.exercise.alias', {
+    user: admin,
+    msg: `${id}: ${name || '(reset)'}`
+  });
+
+  json(res, 200, {
+    ok: true,
+    id,
+    name: name || null
+  });
+}, 
+ 'GET /api/admin/invites': async (req, res) => {
     if (!requireAdmin(req, res)) return;
     // resolve usedBy uid → name for display
     const invites = db.invites.map(i => ({

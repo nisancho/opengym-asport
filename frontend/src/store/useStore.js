@@ -5,6 +5,7 @@ import { registerCustom } from '../lib/exercises.js'
 import { DEMO, DEMO_SEEDED } from '../lib/demo.js'
 import { guestAllowed } from '../lib/guest.js'
 import { MOBILE, nativeLoad, nativeSave, syncReminder } from '../lib/mobile.js'
+import { setExerciseAliases } from '../lib/exercises.js'
 
 const KEY = 'gym_state_v1'
 export const DEF = {
@@ -100,11 +101,23 @@ export const useStore = create((set, get) => {
     // fetch — the login screen and boot both read it, so it is fetched once and cached here
     // rather than by each screen that happens to need it.
     config: null,
-    async loadConfig() {
-      if (get().config) return get().config
-      try { const c = await api('/api/config'); set({ config: c }); return c }
-      catch { return null }
-    },
+      async loadConfig() {
+  if (get().config) return get().config
+
+  try {
+    const [c, a] = await Promise.all([
+      api('/api/config'),
+      api('/api/exercise-aliases')
+    ])
+
+    setExerciseAliases(a?.aliases || {})
+    set({ config: c })
+
+    return c
+  } catch {
+    return null
+  }
+},
 
     setUser(u) {
       if (u) { localStorage.setItem('gym_user', JSON.stringify(u)); localStorage.removeItem('gym_guest') }

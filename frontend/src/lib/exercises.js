@@ -25,8 +25,19 @@ export const smOf = ex => {
 
 export const EXIDX = {}
 EXDB.forEach(e => { EXIDX[e.id] = e })
+let EXERCISE_ALIASES = {}
+
+export const setExerciseAliases = aliases => {
+  EXERCISE_ALIASES = aliases && typeof aliases === 'object' ? aliases : {}
+}
+
 export const exerciseName = ex => {
-  if (!ex?.n) return t('Unknown exercise')
+  if (!ex) return t('Unknown exercise')
+
+  const alias = EXERCISE_ALIASES[ex.id]
+  if (alias) return alias
+
+  if (!ex.n) return t('Unknown exercise')
 
   if (getLang() === 'es') {
     return EXERCISE_NAMES_ES[ex.n] || t(ex.n)
